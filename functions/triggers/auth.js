@@ -1,8 +1,8 @@
-const {db, onUserCreated, onUserDeleted, logger} = require("../common");
+const {db, logger} = require("../common");
+const {auth} = require("firebase-functions/v1");
 
 // 신규 유저
-exports.createUserDocument = onUserCreated(async (event) => {
-  const user = event.data;
+exports.createUserDocument = auth.user().onCreate(async (user) => {
   const userRef = db.collection("users").doc(user.uid);
 
   logger.log(`Creating user document for: ${user.uid}, email: ${user.email}`);
@@ -27,8 +27,7 @@ exports.createUserDocument = onUserCreated(async (event) => {
 });
 
 // 유저 탈퇴
-exports.deleteUserDocument = onUserDeleted(async (event) => {
-  const user = event.data;
+exports.deleteUserDocument = auth.user().onDelete(async (user) => {
   const userRef = db.collection("users").doc(user.uid);
 
   logger.log(`Deleting user document for: ${user.uid}`);

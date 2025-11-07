@@ -1,5 +1,4 @@
-const {db, logger} = require("../common");
-const {pubsub} = require("firebase-functions/v2/pubsub");
+const {db, logger, onSchedule} = require("../common");
 const admin = require("firebase-admin");
 
 /**
@@ -7,7 +6,7 @@ const admin = require("firebase-admin");
  * 1분마다 실행되며, 현재 KST 시간에 알람이 설정된 유저에게
  * 푸시 알림(FCM)을 발송합니다.
  */
-exports.sendWakeUpNotifications = pubsub.onRun(
+exports.sendWakeUpNotifications = onSchedule(
     {
       schedule: "every 1 minutes", // 1분마다 실행
       timeZone: "Asia/Seoul", // KST 기준
