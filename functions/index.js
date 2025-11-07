@@ -3,6 +3,7 @@ const userApi = require("./api/users");
 const challengeApi = require("./api/challenge");
 const teamApi = require("./api/teams");
 const notificationScheduler = require("./scheduled/notifications");
+const dailyReset = require("./scheduled/dailyReset");
 
 // --- API ---
 
@@ -25,3 +26,6 @@ exports.sendWakeUpNotifications = notificationScheduler.sendWakeUpNotifications;
 // auth.js
 exports.createUserDocument = authTriggers.createUserDocument;
 exports.deleteUserDocument = authTriggers.deleteUserDocument;
+
+// dailyReset.js
+exports.dailyResetAndTeamReward = dailyReset.dailyResetAndTeamReward;
