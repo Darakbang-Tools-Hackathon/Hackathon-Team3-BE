@@ -2,8 +2,6 @@ const {db, onCall, HttpsError, logger} = require("../common");
 const {getFirestore} = require("firebase-admin/firestore");
 const admin = require("firebase-admin");
 
-// --- 유틸리티 함수 ---
-
 /**
  * @return {string} 4자리 랜덤 코드 생성
  */
@@ -11,7 +9,7 @@ function generateJoinCode() {
   return Math.random().toString(36).substring(2, 6).toUpperCase();
 }
 
-// --- 1. 팀 생성 (POST /teams) ---
+// create team
 exports.createTeam = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -51,7 +49,7 @@ exports.createTeam = onCall(async (data, context) => {
     const teamRef = await db.collection("teams").add(newTeam);
     const teamId = teamRef.id;
 
-    // ★다중 팀 멤버십 및 팀장 처리: /users/{userId}에 teamIds 및 leaderOf 배열 업데이트
+    // 다중 팀 및 팀장 관리: /users/{userId}에 teamIds 및 leaderOf 배열 업데이트
     await db.collection("users").doc(userId).update({
       teamIds: admin.firestore.FieldValue.arrayUnion(teamId), // 멤버십 추가
       leaderOf: admin.firestore.FieldValue.arrayUnion(teamId), // 팀장 목록에 추가
@@ -69,7 +67,7 @@ exports.createTeam = onCall(async (data, context) => {
 });
 
 
-// --- 2. 팀 참여/신청 (POST /teams/join) ---
+// join team
 exports.joinTeam = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -86,7 +84,7 @@ exports.joinTeam = onCall(async (data, context) => {
 
   try {
     await getFirestore().runTransaction(async (transaction) => {
-      // 1. 팀 코드 검색 및 확인
+      // 팀 코드 검색
       const teamQuery = await transaction.get(
           teamsRef.where("joinCode", "==", joinCode.toUpperCase()),
       );
@@ -97,61 +95,72 @@ exports.joinTeam = onCall(async (data, context) => {
 
       const teamDoc = teamQuery.docs[0];
       const teamId = teamDoc.id;
-      const teamData = teamDoc.data();
+      // const teamData = teamDoc.data();
       const userRef = db.collection("users").doc(userId);
       const userDoc = await transaction.get(userRef);
       const userData = userDoc.data();
       const currentTeamIds = userData.teamIds || [];
 
-      // 2. 이미 팀에 속해 있는지 확인 (다중 팀 멤버십)
+      // 이미 팀에 속해있는지
       if (currentTeamIds.includes(teamId)) {
         throw new HttpsError("failed-precondition", "이미 이 팀의 멤버입니다.");
       }
 
-      // 3. Public vs Private 로직 분기
-      if (teamData.accessType === "public") {
-        // Public 팀: 바로 멤버로 추가
-        const memberUpdateKey = `members.${userId}`;
-        transaction.update(teamDoc.ref, {
-          [memberUpdateKey]: {
-            displayName: displayName,
-            weeklySuccessCount: 0,
-          },
-        });
-        // 유저 문서 업데이트: teamIds 배열에 추가
-        transaction.update(userRef, {
-          teamIds: admin.firestore.FieldValue.arrayUnion(teamId),
-        });
-        return {status: "success", message: "팀에 성공적으로 참가했습니다."};
-      } else {
-        // Private 팀: 가입 요청 목록에 추가
-        if (teamData.pendingMembers && teamData.pendingMembers[userId]) {
-          throw new HttpsError("already-exists", "이미 가입 요청을 보냈습니다.");
-        }
-
-        const pendingMemberUpdateKey = `pendingMembers.${userId}`;
-        transaction.update(teamDoc.ref, {
-          [pendingMemberUpdateKey]: {
-            displayName: displayName,
-            requestedAt: new Date().toISOString(),
-          },
-        });
-        return {status: "pending", message: "팀장 승인을 기다리는 중입니다."};
+      /*
+    // ------ public vs. private team (보류) ------
+    if (teamData.accessType === "public") {
+      const memberUpdateKey = `members.${userId}`;
+      transaction.update(teamDoc.ref, {
+        [memberUpdateKey]: {
+          displayName: displayName,
+          weeklySuccessCount: 0,
+        },
+      });
+      transaction.update(userRef, {
+        teamIds: admin.firestore.FieldValue.arrayUnion(teamId),
+      });
+      return {status: "success", message: "팀에 성공적으로 참가했습니다."};
+    } else {
+      if (teamData.pendingMembers && teamData.pendingMembers[userId]) {
+        throw new HttpsError("already-exists", "이미 가입 요청을 보냈습니다.");
       }
+
+      const pendingMemberUpdateKey = `pendingMembers.${userId}`;
+      transaction.update(teamDoc.ref, {
+        [pendingMemberUpdateKey]: {
+          displayName: displayName,
+          requestedAt: new Date().toISOString(),
+        },
+      });
+      return {status: "pending", message: "팀장 승인을 기다리는 중입니다."};
+    }
+    */
+
+      const memberUpdateKey = `members.${userId}`;
+      transaction.update(teamDoc.ref, {
+        [memberUpdateKey]: {
+          displayName: displayName,
+          weeklySuccessCount: 0,
+        },
+      });
+      transaction.update(userRef, {
+        teamIds: admin.firestore.FieldValue.arrayUnion(teamId),
+      });
+      return {
+        status: "success",
+        message: "팀에 성공적으로 참가했습니다.",
+      };
     });
 
     return {status: "success", message: "처리 완료"};
   } catch (error) {
     logger.error("팀 참가 중 에러:", error);
-    if (error.code) {
-      throw error;
-    }
+    if (error.code) throw error;
     throw new HttpsError("internal", "팀 참가에 실패했습니다.");
   }
 });
 
-
-// --- 3. 팀원 강퇴 (팀장 권한) ---
+// 팀장 권한: 팀원 강퇴
 exports.kickMember = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -195,17 +204,17 @@ exports.kickMember = onCall(async (data, context) => {
       const teamData = teamDoc.data();
       const userData = userDoc.data();
 
-      // 1. 팀장 권한 확인
+      // 팀장 권한 확인
       if (teamData.leaderId !== leaderId) {
         throw new HttpsError("permission-denied", "팀장만 팀원을 강퇴할 수 있습니다.");
       }
 
-      // 2. 멤버가 팀에 속해 있는지 확인
+      // 멤버 확인
       if (!teamData.members || !teamData.members[memberIdToKick]) {
         throw new HttpsError("not-found", "해당 멤버는 팀에 속해 있지 않습니다.");
       }
 
-      // 3. /teams 문서에서 멤버 삭제
+      // 멤버 삭제
       const newMembers = {...teamData.members};
       delete newMembers[memberIdToKick];
 
@@ -213,7 +222,7 @@ exports.kickMember = onCall(async (data, context) => {
         members: newMembers,
       });
 
-      // 4. 강퇴된 유저의 /users/{memberIdToKick} 문서에서 teamIds 및 leaderOf 초기화
+      // 강퇴된 유저의 /users/{memberIdToKick}에서 teamIds 및 leaderOf 초기화
       const memberIsLeader = (userData.leaderOf || []).includes(teamId);
 
       const userUpdateData = {
@@ -239,7 +248,7 @@ exports.kickMember = onCall(async (data, context) => {
 });
 
 
-// --- 4. 팀장 위임 (팀장 권한) ---
+// 팀장 위임
 exports.delegateLeader = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -281,27 +290,27 @@ exports.delegateLeader = onCall(async (data, context) => {
 
       const teamData = teamDoc.data();
 
-      // 1. 현재 유저가 팀장인지 확인
+      // 팀장 확인
       if (teamData.leaderId !== currentLeaderId) {
         throw new HttpsError("permission-denied", "현재 팀장만 권한을 위임할 수 있습니다.");
       }
 
-      // 2. 새 리더가 팀 멤버인지 확인
+      // 새 리더가 팀 멤버인지 확인
       if (!teamData.members || !teamData.members[newLeaderId]) {
         throw new HttpsError("not-found", "위임할 멤버가 팀에 속해 있지 않습니다.");
       }
 
-      // 3. team 문서의 leaderId 필드 업데이트
+      // leaderId update
       transaction.update(teamRef, {
         leaderId: newLeaderId,
       });
 
-      // 4. (다중 팀장 처리) 현재 팀장의 leaderOf 배열에서 팀 ID 제거
+      // 현재 팀장의 leaderOf에서 teamId 제거
       transaction.update(currentLeaderUserRef, {
         leaderOf: admin.firestore.FieldValue.arrayRemove(teamId),
       });
 
-      // 5. (다중 팀장 처리) 새 팀장의 leaderOf 배열에 팀 ID 추가
+      // 새 팀장의 leaderOf에서 teamId 추가
       transaction.update(newLeaderUserRef, {
         leaderOf: admin.firestore.FieldValue.arrayUnion(teamId),
       });
@@ -318,7 +327,7 @@ exports.delegateLeader = onCall(async (data, context) => {
 });
 
 
-// --- 5. 팀 탈퇴 (멤버도 리더도 모두 사용 가능) ---
+// 팀 탈퇴
 exports.leaveTeam = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -329,7 +338,7 @@ exports.leaveTeam = onCall(async (data, context) => {
   const userRef = db.collection("users").doc(userId);
 
   if (!teamId) {
-    // teamId가 없으면 유저 문서에서만 teamIds와 leaderOf를 정리하고 종료
+    // teamId가 없으면 /users에서만 teamIds와 leaderOf를 정리하고 종료
     await userRef.update({
       teamIds: admin.firestore.FieldValue.arrayRemove(null),
       leaderOf: admin.firestore.FieldValue.arrayRemove(null),
@@ -353,7 +362,6 @@ exports.leaveTeam = onCall(async (data, context) => {
       const teamData = teamDoc.data();
       const isLeaderOfThisTeam = teamData.leaderId === userId;
 
-      // 1. 멤버 목록에서 삭제
       if (teamData.members && teamData.members[userId]) {
         const newMembers = {...teamData.members};
         delete newMembers[userId];
@@ -362,7 +370,7 @@ exports.leaveTeam = onCall(async (data, context) => {
           members: newMembers,
         });
 
-        // 2. 팀장이 탈퇴할 경우 (다른 멤버에게 위임하거나 팀 삭제)
+        // 팀장 탈퇴
         if (isLeaderOfThisTeam) {
           const remainingMembers = Object.keys(newMembers);
           if (remainingMembers.length > 0) {
@@ -375,7 +383,7 @@ exports.leaveTeam = onCall(async (data, context) => {
         }
       }
 
-      // 3. 유저 문서에서 teamIds 및 leaderOf 정리
+      // teamIds, leaderOf에서 teamId 제거
       transaction.update(userRef, {
         teamIds: admin.firestore.FieldValue.arrayRemove(teamId),
         leaderOf: admin.firestore.FieldValue.arrayRemove(teamId),
@@ -392,8 +400,9 @@ exports.leaveTeam = onCall(async (data, context) => {
   }
 });
 
+/* ------ 가입 요청 (보류) ------
 
-// --- 6. (신규) 가입 요청 승인 (팀장 권한) ---
+// 가입 요청 승인
 exports.acceptJoinRequest = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -423,23 +432,20 @@ exports.acceptJoinRequest = onCall(async (data, context) => {
       const teamData = teamDoc.data();
       const userData = userDoc.data();
 
-      // 1. 팀장 권한 확인
+      // 팀장 권한 확인
       if (teamData.leaderId !== leaderId) {
         throw new HttpsError("permission-denied", "팀장만 가입 요청을 승인할 수 있습니다.");
       }
 
-      // 2. 요청이 대기 중인지 확인
       if (!teamData.pendingMembers ||
         !teamData.pendingMembers[pendingMemberId]) {
         throw new HttpsError("failed-precondition", "대기 중인 요청이 없습니다.");
       }
 
-      // 3. 유저가 이미 이 팀에 속해있는지 확인 (다중 멤버십)
       if ((userData.teamIds || []).includes(teamId)) {
         throw new HttpsError("already-exists", "유저가 이미 팀 멤버입니다.");
       }
 
-      // 4. /teams 문서에서 처리: 멤버에 추가하고, pendingMembers에서 삭제
       const memberUpdateKey = `members.${pendingMemberId}`;
       const pendingRemoveKey = `pendingMembers.${pendingMemberId}`;
 
@@ -451,7 +457,6 @@ exports.acceptJoinRequest = onCall(async (data, context) => {
         [pendingRemoveKey]: admin.firestore.FieldValue.delete(),
       });
 
-      // 5. 유저 문서 업데이트: teamIds 배열에 팀 ID 추가
       transaction.update(userRef, {
         teamIds: admin.firestore.FieldValue.arrayUnion(teamId),
       });
@@ -468,7 +473,7 @@ exports.acceptJoinRequest = onCall(async (data, context) => {
 });
 
 
-// --- 7. (신규) 가입 요청 거절 (팀장 권한) ---
+// 가입 요청 거절
 exports.rejectJoinRequest = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -490,17 +495,15 @@ exports.rejectJoinRequest = onCall(async (data, context) => {
     }
     const teamData = teamDoc.data();
 
-    // 1. 팀장 권한 확인
+    // 팀장 권한 확인
     if (teamData.leaderId !== leaderId) {
       throw new HttpsError("permission-denied", "팀장만 요청을 거절할 수 있습니다.");
     }
 
-    // 2. 요청이 대기 중인지 확인
     if (!teamData.pendingMembers || !teamData.pendingMembers[pendingMemberId]) {
       throw new HttpsError("failed-precondition", "대기 중인 요청이 없습니다.");
     }
 
-    // 3. /teams 문서에서 pendingMembers 필드만 삭제
     const pendingRemoveKey = `pendingMembers.${pendingMemberId}`;
     await teamRef.update({
       [pendingRemoveKey]: admin.firestore.FieldValue.delete(),
@@ -517,7 +520,7 @@ exports.rejectJoinRequest = onCall(async (data, context) => {
 });
 
 
-// --- 8. (신규) 가입 요청 목록 조회 (팀장 권한) ---
+// 가입 요청 목록 조회
 exports.getPendingRequests = onCall(async (data, context) => {
   if (!context.auth) {
     throw new HttpsError("unauthenticated", "로그인이 필요한 기능입니다.");
@@ -539,12 +542,12 @@ exports.getPendingRequests = onCall(async (data, context) => {
     }
     const teamData = teamDoc.data();
 
-    // 1. 팀장 권한 확인
+    // 팀장 권한 확인
     if (teamData.leaderId !== leaderId) {
       throw new HttpsError("permission-denied", "팀장만 요청 목록을 조회할 수 있습니다.");
     }
 
-    // 2. 요청 목록 반환 (pendingMembers 맵을 배열로 변환하여 반환)
+
     const pendingMembers = teamData.pendingMembers || {};
 
     const requests = Object.keys(pendingMembers).map((userId) => ({
@@ -562,3 +565,4 @@ exports.getPendingRequests = onCall(async (data, context) => {
     throw new HttpsError("internal", "요청 목록 조회에 실패했습니다.");
   }
 });
+*/

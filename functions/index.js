@@ -4,6 +4,7 @@ const challengeApi = require("./api/challenge");
 const teamApi = require("./api/teams");
 const notificationScheduler = require("./scheduled/notifications");
 const dailyReset = require("./scheduled/dailyReset");
+const rankingScheduler = require("./scheduled/ranking");
 
 // --- API ---
 
@@ -29,3 +30,6 @@ exports.deleteUserDocument = authTriggers.deleteUserDocument;
 
 // dailyReset.js
 exports.dailyResetAndTeamReward = dailyReset.dailyResetAndTeamReward;
+
+// ranking.js
+exports.processWeeklyRanking = rankingScheduler.processWeeklyRanking;
