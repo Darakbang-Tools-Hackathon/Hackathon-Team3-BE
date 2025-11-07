@@ -1,8 +1,7 @@
-const functions = require("firebase-functions");
 const admin = require("firebase-admin");
+const {db, onSchedule} = require("../common");
 
 if (!admin.apps.length) admin.initializeApp();
-const db = admin.firestore();
 
 const TEAM_REWARD_PER_SUCCESS = 5; // 팀원 1명 성공당 팀 LP 보상
 
@@ -58,11 +57,12 @@ async function commitBatches(writes) {
  * 2️. 팀 보상 (어제 성공률 기반)
  * 3️. 유저 상태 리셋 (월요일: 주간 카운트 초기화)
  */
-exports.dailyResetAndTeamReward = functions
-    .region("asia-northeast3")
-    .pubsub.schedule("0 0 * * *") // 매일 자정
-    .timeZone("Asia/Seoul")
-    .onRun(async () => {
+exports.dailyResetAndTeamReward = onSchedule(
+    {
+      schedule: "0 0 * * *", // 매일 자정
+      timeZone: "Asia/Seoul",
+    },
+    async (_context) => {
       await writeTodayMission();
 
       const usersSnap = await db.collection("users").get();
@@ -116,4 +116,5 @@ exports.dailyResetAndTeamReward = functions
       }
 
       return null;
-    });
+    },
+);
