@@ -13,3 +13,6 @@ exports.registerDeviceToken = userApi.registerDeviceToken;
 
 const missionApi = require("./api/missions");
 exports.getTodayMission = missionApi.getTodayMission;
+
+const notificationScheduler = require("./scheduled/notifications");
+exports.sendWakeUpNotifications = notificationScheduler.sendWakeUpNotifications;
