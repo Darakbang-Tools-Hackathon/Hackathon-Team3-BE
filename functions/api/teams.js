@@ -1,35 +1,36 @@
-const functions = require("firebase-functions");
-const admin = require("firebase-admin");
-const db = admin.firestore();
-
-// Create Team
+const {db, onCall, HttpsError, logger} = require("../common");
 
 /**
+ * 4자리 랜덤 참여 코드를 생성합니다.
  * @return {string} 4자리 랜덤 코드
  */
 function generateJoinCode() {
   return Math.random().toString(36).substring(2, 6).toUpperCase();
 }
 
-exports.createTeam = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
+/**
+ * Create Team
+ */
+exports.createTeam = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError(
         "unauthenticated",
         "로그인이 필요한 기능입니다.",
     );
   }
 
-  const teamName = data.teamName;
+  const teamName = request.data.teamName;
   if (!teamName || typeof teamName !== "string" || teamName.length < 2) {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
         "invalid-argument",
         "팀 이름은 2글자 이상이어야 합니다.",
     );
   }
 
+  const userId = request.auth.uid;
+
   try {
-    const userId = context.auth.uid;
-    const displayName = context.auth.token.name || "user";
+    const displayName = request.auth.token.name || "user";
     const joinCode = generateJoinCode();
 
     const newTeam = {
@@ -39,7 +40,7 @@ exports.createTeam = functions.https.onCall(async (data, context) => {
       members: {
         [userId]: {
           displayName: displayName,
-          totalSuccess: 0,
+          weeklySuccessCount: 0,
         },
       },
     };
@@ -52,39 +53,42 @@ exports.createTeam = functions.https.onCall(async (data, context) => {
       teamId: teamRef.id,
     });
 
+    logger.log(`Team created: ${teamRef.id} by user ${userId}`);
     return {
       status: "success",
       teamId: teamRef.id,
       joinCode: joinCode,
     };
   } catch (error) {
-    console.error("팀 생성 중 오류:", error);
-    throw new functions.https.HttpsError(
+    logger.error(`Error creating team for user ${userId}:`, error);
+    throw new HttpsError(
         "internal",
         "팀 생성에 실패했습니다.",
     );
   }
 });
 
-// Join Team
-exports.joinTeam = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError(
+/**
+ * Join Team
+ */
+exports.joinTeam = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError(
         "unauthenticated",
         "로그인이 필요한 기능입니다.",
     );
   }
 
-  const joinCode = data.joinCode;
+  const joinCode = request.data.joinCode;
   if (!joinCode || typeof joinCode !== "string") {
-    throw new functions.https.HttpsError(
+    throw new HttpsError(
         "invalid-argument",
         "참여 코드가 올바르지 않습니다.",
     );
   }
 
-  const userId = context.auth.uid;
-  const displayName = context.auth.token.name || "user";
+  const userId = request.auth.uid;
+  const displayName = request.auth.token.name || "user";
 
   try {
     await db.runTransaction(async (transaction) => {
@@ -95,7 +99,7 @@ exports.joinTeam = functions.https.onCall(async (data, context) => {
       );
 
       if (teamQuery.empty) {
-        throw new functions.https.HttpsError(
+        throw new HttpsError(
             "not-found",
             "존재하지 않는 참여 코드입니다.",
         );
@@ -110,7 +114,7 @@ exports.joinTeam = functions.https.onCall(async (data, context) => {
       transaction.update(teamDoc.ref, {
         [memberUpdateKey]: {
           displayName: displayName,
-          totalSuccess: 0,
+          weeklySuccessCount: 0,
         },
       });
 
@@ -121,12 +125,86 @@ exports.joinTeam = functions.https.onCall(async (data, context) => {
       });
     });
 
+    logger.log(`User ${userId} joined team with code ${joinCode}`);
     return {status: "success", message: "팀에 성공적으로 참가했습니다."};
   } catch (error) {
-    console.error("팀 참가 중 에러:", error);
-    if (error instanceof functions.https.HttpsError) {
+    logger.error(`Error joining team for user ${userId}:`, error);
+    if (error instanceof HttpsError) {
       throw error;
     }
-    throw new functions.https.HttpsError("internal", "팀 참가에 실패했습니다.");
+    throw new HttpsError("internal", "팀 참가에 실패했습니다.");
+  }
+});
+
+/**
+ * Team Dashboard 조회
+ */
+exports.getTeamDashboard = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError(
+        "unauthenticated",
+        "로그인이 필요한 기능입니다.",
+    );
+  }
+
+  const teamId = request.data.teamId;
+  if (!teamId || typeof teamId !== "string") {
+    throw new HttpsError(
+        "invalid-argument",
+        "팀 ID가 올바르지 않습니다.",
+    );
+  }
+
+  const userId = request.auth.uid;
+
+  try {
+    const teamDoc = await db.collection("teams").doc(teamId).get();
+
+    if (!teamDoc.exists) {
+      throw new HttpsError(
+          "not-found",
+          "팀을 찾을 수 없습니다.",
+      );
+    }
+
+    const teamData = teamDoc.data();
+
+    if (!teamData.members || !teamData.members[userId]) {
+      throw new HttpsError(
+          "permission-denied",
+          "이 팀의 멤버가 아닙니다.",
+      );
+    }
+
+    const membersArray = Object.keys(teamData.members).map((id) => {
+      return {
+        userId: id,
+        displayName: teamData.members[id].displayName,
+        weeklySuccessCount: teamData.members[id].weeklySuccessCount || 0,
+      };
+    });
+
+    // weeklySuccessCount 기준 랭킹
+    membersArray.sort((a, b) => b.weeklySuccessCount - a.weeklySuccessCount);
+
+    logger.log(`Fetched dashboard for team ${teamId}`);
+    return {
+      status: "success",
+      teamInfo: {
+        teamName: teamData.teamName,
+        teamLP: teamData.teamLP,
+        joinCode: teamData.joinCode,
+      },
+      ranking: membersArray,
+    };
+  } catch (error) {
+    logger.error(`Error fetching dashboard for team ${teamId}:`, error);
+    if (error instanceof HttpsError) {
+      throw error;
+    }
+    throw new HttpsError(
+        "internal",
+        "대시보드 조회에 실패했습니다.",
+    );
   }
 });
