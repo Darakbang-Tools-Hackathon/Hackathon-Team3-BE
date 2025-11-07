@@ -1,5 +1,10 @@
 const {db, logger} = require("../common");
 const {auth} = require("firebase-functions/v1");
+const admin = require("firebase-admin");
+
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 
 // 신규 유저
 exports.createUserDocument = auth.user().onCreate(async (user) => {
@@ -13,10 +18,15 @@ exports.createUserDocument = auth.user().onCreate(async (user) => {
       displayName: user.displayName || "신규 유저",
       userLP: 0,
       wakeUpTime: null,
-      teamId: null,
+      teamIds: [],
+      leaderOf: [],
       lastChallengeStatus: "pending",
       weeklySuccessCount: 0,
       fcmToken: null,
+      currentMissionId: null,
+      totalSuccessCount: 0,
+      totalFailCount: 0,
+      createAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     logger.log(`Successfully created user document for: ${user.uid}`);
     return;
